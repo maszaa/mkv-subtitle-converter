@@ -10,6 +10,7 @@ SUBTITLE_TEMP_DIRECTORY = "/tmp/subtitles"
 
 MKV_FILE_EXTENSION = ".mkv"
 MKV_MERGED_FILE_SUFFIX = f"-merged{MKV_FILE_EXTENSION}"
+MKV_REMOVE_ORIGINAL_FILE = False
 
 EXCLUDE_FILE_PATTERNS = []
 
@@ -17,7 +18,7 @@ BDSup2Sub512_PATH = "/home/pi/Software/BDSup2Sub512.jar"
 MKVEXTRACT_PATH = "/usr/bin/mkvextract"
 
 ENCODING = "utf-8"
-MAX_CONCURRENCY = 8
+MAX_CONCURRENCY = 4
 
 SEMAPHORE = threading.Semaphore(value=MAX_CONCURRENCY)
 

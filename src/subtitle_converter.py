@@ -146,6 +146,10 @@ def mux_mkv_file(mkv_file, filepath, use_pymkv_mux=False):
   LOGGER.info(f"Muxed mkv file {mkv_file.title} to file {output_file}")
   return result
 
+def remove_mkv_file(filepath):
+  os.remove(filepath)
+  LOGGER.warning(f"Removed mkv file {filepath}")
+
 def create_subtitle_temp_dir():
   if not os.path.exists(SUBTITLE_TEMP_DIRECTORY):
     os.makedirs(SUBTITLE_TEMP_DIRECTORY)
@@ -175,9 +179,14 @@ def handle_mkv_file(filepath):
 
       if len(converted_subtitles.keys()):
         proceeded_to_mux = True
+
         add_subtitle_tracks_to_mkv_file(mkv_file, converted_subtitles)
-        mux_mkv_file(mkv_file, filepath)
+        success = mux_mkv_file(mkv_file, filepath)
+
         remove_subtitle_files(converted_subtitles)
+
+        if success == 0 and MKV_REMOVE_ORIGINAL_FILE is True:
+          remove_mkv_file(filepath)
 
   if proceeded_to_mux is False:
     LOGGER.info(f"No subtitles to convert in file {filepath}")
