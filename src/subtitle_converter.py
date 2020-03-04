@@ -110,10 +110,41 @@ def add_subtitle_tracks_to_mkv_file(mkv_file, subtitles):
     mkv_file.add_track(subtitle_track)
     LOGGER.info(f"Added subtitle {subtitle} with language {language} to mkv file {mkv_file.title}")
 
-def mux_mkv_file(mkv_file, filepath):
-  LOGGER.info(f"Muxing mkv file {mkv_file.title} to file {filepath}")
-  mkv_file.mux(filepath.replace(MKV_FILE_EXTENSION, MKV_MERGED_FILE_SUFFIX))
-  LOGGER.info(f"Muxed mkv file {mkv_file.title} to file {filepath}")
+def mux_mkv_file_with_subprocess(commands):
+  mux = subprocess.run(
+    commands,
+    capture_output=True
+  )
+
+  LOGGER.info(mux.args)
+
+  stdout = mux.stdout.decode(sys.stdout.encoding)
+  stderr = mux.stderr.decode(sys.stderr.encoding)
+  if stdout:
+    LOGGER.info(stdout)
+  if stderr:
+    LOGGER.error(stderr)
+
+  if mux.returncode == 0:
+    LOGGER.info("Muxing successful")
+  else:
+    LOGGER.error(f"Muxing failed with code {mux.returncode}, check stdout and stderr")
+
+  return mux.returncode
+
+def mux_mkv_file(mkv_file, filepath, use_pymkv_mux=False):
+  output_file = filepath.replace(MKV_FILE_EXTENSION, MKV_MERGED_FILE_SUFFIX)
+  result = None
+
+  LOGGER.info(f"Muxing mkv file {mkv_file.title} to file {output_file}")
+
+  if use_pymkv_mux is True:
+    mkv_file.mux(output_file)
+  else:
+    result = mux_mkv_file_with_subprocess(mkv_file.command(output_file, subprocess=subprocess))
+
+  LOGGER.info(f"Muxed mkv file {mkv_file.title} to file {output_file}")
+  return result
 
 def create_subtitle_temp_dir():
   if not os.path.exists(SUBTITLE_TEMP_DIRECTORY):
