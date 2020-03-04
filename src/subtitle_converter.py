@@ -163,6 +163,10 @@ def read_input_dir(input_dir):
   for f in dir_content:
     full_path = os.path.join(input_dir, f)
 
+    if any(exclude_file_pattern in full_path for exclude_file_pattern in EXCLUDE_FILE_PATTERNS):
+      LOGGER.info(f"{full_path} is excluded in configuration (exclusions: {EXCLUDE_FILE_PATTERNS}, proceeding to next item")
+      continue
+
     if os.path.isdir(full_path):
       LOGGER.debug(f"Found child directory inside {input_dir}, reading it")
       read_input_dir(full_path)

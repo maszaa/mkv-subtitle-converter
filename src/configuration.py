@@ -11,6 +11,8 @@ SUBTITLE_TEMP_DIRECTORY = "/tmp/subtitles"
 MKV_FILE_EXTENSION = ".mkv"
 MKV_MERGED_FILE_SUFFIX = f"-merged{MKV_FILE_EXTENSION}"
 
+EXCLUDE_FILE_PATTERNS = []
+
 BDSup2Sub512_PATH = "/home/pi/Software/BDSup2Sub512.jar"
 MKVEXTRACT_PATH = "/usr/bin/mkvextract"
 
@@ -38,6 +40,6 @@ STDERR_HANDLER.setLevel(logging.ERROR)
 LOGGER.addHandler(STDERR_HANDLER)
 
 try:
-  from own_configuration import *
+  from local_configuration import *
 except ModuleNotFoundError:
   pass
