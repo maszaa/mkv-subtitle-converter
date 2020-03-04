@@ -1,33 +1,26 @@
 import hashlib
-import logging
 import os
 import subprocess
 import sys
 import threading
 
-from pymkv import MKVFile
+from pymkv import MKVFile, MKVTrack
 
-from constants import *
+from configuration import *
 
-LOG_FORMAT = "[%(asctime)-15s: %(levelname)s/%(funcName)s] %(message)s"
-LOG_FORMATTER = logging.Formatter(LOG_FORMAT)
+def remove_subtitle_files(subtitle_files):
+  LOGGER.warning("Removing subtitle files")
+  for subtitle_file in subtitle_files:
+    os.remove(subtitle_file)
+    LOGGER.warning(f"Removed subtitle file {subtitle_file}")
 
-LOGGER = logging.getLogger(f"{LOGGER_NAME}-stdout")
-LOGGER.setLevel(logging.DEBUG)
-
-STDOUT_HANDLER = logging.StreamHandler(sys.stdout)
-STDOUT_HANDLER.setFormatter(LOG_FORMATTER)
-LOGGER.addHandler(STDOUT_HANDLER)
-
-STDERR_HANDLER = logging.StreamHandler(sys.stderr)
-STDERR_HANDLER.setFormatter(LOG_FORMATTER)
-STDERR_HANDLER.setLevel(logging.ERROR)
-LOGGER.addHandler(STDERR_HANDLER)
-
-SEMAPHORE = threading.Semaphore(value=MAX_CONCURRENCY)
+    if SUBTITLE_OUTPUT_EXTENSION in subtitle_file:
+      sub_subtitle_file = subtitle_file.replace(SUBTITLE_OUTPUT_EXTENSION, SUBTITLE_SUB_OUTPUT_EXTENSION)
+      os.remove(sub_subtitle_file)
+      LOGGER.warning(f"Removed {SUBTITLE_SUB_OUTPUT_EXTENSION} subtitle file {sub_subtitle_file}")
 
 def convert_subtitle(input_subtitle):
-  output_subtitle = f"{input_subtitle}.{SUBTITLE_OUTPUT_EXTENSION}"
+  output_subtitle = f"{input_subtitle}{SUBTITLE_OUTPUT_EXTENSION}"
 
   LOGGER.info(f"Converting subtitle {input_subtitle}")
 
@@ -47,8 +40,7 @@ def convert_subtitle(input_subtitle):
 
   if convert.returncode == 0 and ERROR_SIGN not in stdout.lower():
     LOGGER.info(f"Converted subtitle {input_subtitle} to {output_subtitle}")
-    os.remove(input_subtitle)
-    LOGGER.warning(f"Removed input subtitle file {input_subtitle}")
+    remove_subtitle_files([input_subtitle])
 
     return output_subtitle
 
@@ -61,15 +53,15 @@ def convert_subtitle(input_subtitle):
   return []
 
 def get_subtitle_track_ids(mkv_file):
-  subtitle_track_ids = []
+  subtitle_track_ids = {}
 
   for track in mkv_file.tracks:
     if track.track_type == SUBTITLE_TRACK_TYPE:
       if track.track_codec not in SUBTITLE_OUTPUT_FORMATS:
-        subtitle_track_ids.append(track.track_id)
+        subtitle_track_ids[track.track_id] = track.language
       else:
         LOGGER.info(f"File {mkv_file.title} already has {'/'.join(SUBTITLE_OUTPUT_FORMATS)} subtitles")
-        return []
+        return {}
 
   return subtitle_track_ids
 
@@ -112,11 +104,13 @@ def extract_subtitles(filepath, subtitle_arguments):
   return []
 
 def add_subtitle_tracks_to_mkv_file(mkv_file, subtitles):
-  for subtitle in subtitles:
-    mkv_file.add_track(subtitle)
-    LOGGER.info(f"Added subtitle {subtitle} to mkv file {mkv_file.title}")
+  for subtitle in subtitles.keys():
+    language = subtitles.get(subtitle)
+    subtitle_track = MKVTrack(subtitle, language=language)
+    mkv_file.add_track(subtitle_track)
+    LOGGER.info(f"Added subtitle {subtitle} with language {language} to mkv file {mkv_file.title}")
 
-def mux_mkv_file(mkv_file, filepath, subtitle_files):
+def mux_mkv_file(mkv_file, filepath):
   LOGGER.info(f"Muxing mkv file {mkv_file.title} to file {filepath}")
   mkv_file.mux(filepath.replace(MKV_FILE_EXTENSION, MKV_MERGED_FILE_SUFFIX))
   LOGGER.info(f"Muxed mkv file {mkv_file.title} to file {filepath}")
@@ -125,20 +119,6 @@ def create_subtitle_temp_dir():
   if not os.path.exists(SUBTITLE_TEMP_DIRECTORY):
     os.makedirs(SUBTITLE_TEMP_DIRECTORY)
 
-def remove_converted_subtitles(subtitle_files):
-  LOGGER.warning("Removing subtitle files")
-  for subtitle_file in subtitle_files:
-    os.remove(subtitle_file)
-    LOGGER.warning(f"Removed subtitle file {subtitle_file}")
-
-    if SUBTITLE_OUTPUT_EXTENSION in subtitle_file:
-      sub_subtitle_file = subtitle_file.replace(
-        SUBTITLE_OUTPUT_EXTENSION,
-        list(set(SUBTITLE_OUTPUT_FILE_EXTENSIONS) - set(SUBTITLE_OUTPUT_EXTENSION))[0]
-      )
-      os.remove(sub_subtitle_file)
-      LOGGER.warning(f"Removed .sub subtitle file {sub_subtitle_file}")
-
 def handle_mkv_file(filepath):
   SEMAPHORE.acquire()
 
@@ -146,27 +126,27 @@ def handle_mkv_file(filepath):
   subtitle_track_ids = get_subtitle_track_ids(mkv_file)
   proceeded_to_mux = False
 
-  if len(subtitle_track_ids):
+  if len(subtitle_track_ids.keys()):
     LOGGER.info(f"Found suitable subtitles in file {filepath}")
 
     filepath_md5 = hashlib.md5(filepath.encode(encoding=ENCODING)).hexdigest()
     LOGGER.info(f"MD5 hash of file {filepath}: {filepath_md5}")
 
-    subtitle_arguments = get_subtitle_extraction_arguments(filepath_md5, subtitle_track_ids)
+    subtitle_arguments = get_subtitle_extraction_arguments(filepath_md5, subtitle_track_ids.keys())
     create_subtitle_temp_dir()
     extracted_subtitles = extract_subtitles(filepath, subtitle_arguments)
 
     if len(extracted_subtitles):
-      converted_subtitles = []
+      converted_subtitles = {}
 
-      for subtitle in extracted_subtitles:
-        converted_subtitles.append(convert_subtitle(subtitle))
+      for subtitle, language in zip(extracted_subtitles, subtitle_track_ids.values()):
+        converted_subtitles[convert_subtitle(subtitle)] = language
 
-      if len(converted_subtitles):
+      if len(converted_subtitles.keys()):
         proceeded_to_mux = True
         add_subtitle_tracks_to_mkv_file(mkv_file, converted_subtitles)
         mux_mkv_file(mkv_file, filepath)
-        remove_converted_subtitles(converted_subtitles)
+        remove_subtitle_files(converted_subtitles)
 
   if proceeded_to_mux is False:
     LOGGER.info(f"No subtitles to convert in file {filepath}")
@@ -195,10 +175,9 @@ def read_input_dir(input_dir):
         LOGGER.info(f"Created {job_name} job for file {full_path}")
 
   for job in jobs:
-    LOGGER.info(f"Starting job {job.name}")
     job.start()
     LOGGER.info(f"Started job {job.name}")
 
   for job in jobs:
-    LOGGER.info(f"Waiting for job {job.name}")
     job.join()
+    LOGGER.info(f"Job {job.name} ready")
