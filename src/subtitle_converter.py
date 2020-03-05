@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import threading
+import traceback
 
 from pymkv import MKVFile, MKVTrack
 
@@ -50,8 +51,6 @@ def convert_subtitle(input_subtitle):
   msg = f"Conversion failed with code {convert.returncode}, check stdout and stderr"
   LOGGER.error(msg)
 
-  return []
-
 def get_subtitle_track_ids(mkv_file):
   subtitle_track_ids = {}
 
@@ -72,14 +71,14 @@ def get_subtitle_extraction_arguments(filepath_md5, subtitle_track_ids):
     subtitle_file = os.path.join(SUBTITLE_TEMP_DIRECTORY, f"{filepath_md5}-{subtitle_track_id}")
     subtitle_arguments.append(f"{subtitle_track_id}:{subtitle_file}")
 
-  return " ".join(subtitle_arguments)
+  return subtitle_arguments
 
 def extract_subtitles(filepath, subtitle_arguments):
   LOGGER.info(f"Extracting subtitles from file {filepath}")
   LOGGER.info(subtitle_arguments)
 
   extract = subprocess.run(
-    [MKVEXTRACT_PATH, filepath, "tracks", subtitle_arguments],
+    [MKVEXTRACT_PATH, filepath, "tracks", *subtitle_arguments],
     capture_output=True
   )
 
@@ -94,7 +93,7 @@ def extract_subtitles(filepath, subtitle_arguments):
 
   if extract.returncode == 0:
     LOGGER.info(f"Extracted subtitles from file {filepath}")
-    extracted_subtitles = [subtitle_argument.split(":").pop() for subtitle_argument in subtitle_arguments.split(" ") if subtitle_argument]
+    extracted_subtitles = [subtitle_argument.split(":").pop() for subtitle_argument in subtitle_arguments if subtitle_argument]
     LOGGER.info(extracted_subtitles)
     return extracted_subtitles
 
@@ -157,71 +156,86 @@ def create_subtitle_temp_dir():
 def handle_mkv_file(filepath):
   SEMAPHORE.acquire()
 
-  mkv_file = MKVFile(file_path=filepath)
-  subtitle_track_ids = get_subtitle_track_ids(mkv_file)
-  proceeded_to_mux = False
+  try:
+    mkv_file = MKVFile(file_path=filepath)
+    subtitle_track_ids = get_subtitle_track_ids(mkv_file)
+    proceeded_to_mux = False
 
-  if len(subtitle_track_ids.keys()):
-    LOGGER.info(f"Found suitable subtitles in file {filepath}")
+    if len(subtitle_track_ids.keys()):
+      LOGGER.info(f"Found suitable subtitles in file {filepath}")
 
-    filepath_md5 = hashlib.md5(filepath.encode(encoding=ENCODING)).hexdigest()
-    LOGGER.info(f"MD5 hash of file {filepath}: {filepath_md5}")
+      filepath_md5 = hashlib.md5(filepath.encode(encoding=ENCODING)).hexdigest()
+      LOGGER.info(f"MD5 hash of file {filepath}: {filepath_md5}")
 
-    subtitle_arguments = get_subtitle_extraction_arguments(filepath_md5, subtitle_track_ids.keys())
-    create_subtitle_temp_dir()
-    extracted_subtitles = extract_subtitles(filepath, subtitle_arguments)
+      subtitle_arguments = get_subtitle_extraction_arguments(filepath_md5, subtitle_track_ids.keys())
+      create_subtitle_temp_dir()
+      extracted_subtitles = extract_subtitles(filepath, subtitle_arguments)
 
-    if len(extracted_subtitles):
-      converted_subtitles = {}
+      if len(extracted_subtitles):
+        converted_subtitles = {}
 
-      for subtitle, language in zip(extracted_subtitles, subtitle_track_ids.values()):
-        converted_subtitles[convert_subtitle(subtitle)] = language
+        for subtitle, language in zip(extracted_subtitles, subtitle_track_ids.values()):
+          converted_subtitle = convert_subtitle(subtitle)
+          if converted_subtitle:
+            converted_subtitles[converted_subtitle] = language
 
-      if len(converted_subtitles.keys()):
-        proceeded_to_mux = True
+        if len(converted_subtitles.keys()):
+          proceeded_to_mux = True
 
-        add_subtitle_tracks_to_mkv_file(mkv_file, converted_subtitles)
-        success = mux_mkv_file(mkv_file, filepath)
+          add_subtitle_tracks_to_mkv_file(mkv_file, converted_subtitles)
+          success = mux_mkv_file(mkv_file, filepath)
 
-        remove_subtitle_files(converted_subtitles)
+          remove_subtitle_files(converted_subtitles)
 
-        if success == 0 and MKV_REMOVE_ORIGINAL_FILE is True:
-          remove_mkv_file(filepath)
+          if success == 0 and MKV_REMOVE_ORIGINAL_FILE is True:
+            remove_mkv_file(filepath)
 
-  if proceeded_to_mux is False:
-    LOGGER.info(f"No subtitles to convert in file {filepath}")
+    if proceeded_to_mux is False:
+      LOGGER.info(f"No subtitles to convert in file {filepath}")
+
+  except Exception:
+    LOGGER.error(f"Error occured when handling file {filepath}:")
+    LOGGER.error(traceback.format_exc())
 
   SEMAPHORE.release()
 
-def read_input_dir(input_dir):
-  job_name = handle_mkv_file.__name__
-  jobs = []
+def read_input_path(input_path):
+  try:
+    job_name = handle_mkv_file.__name__
+    jobs = []
 
-  LOGGER.debug(f"Reading {input_dir}")
-  dir_content = os.listdir(input_dir)
+    LOGGER.debug(f"Reading {input_path}")
+    dir_content = os.listdir(input_path)
 
-  for f in dir_content:
-    full_path = os.path.join(input_dir, f)
+    for f in dir_content:
+      full_path = os.path.join(input_path, f)
 
-    if any(exclude_file_pattern in full_path for exclude_file_pattern in EXCLUDE_FILE_PATTERNS):
-      LOGGER.info(f"{full_path} is excluded in configuration (exclusions: {EXCLUDE_FILE_PATTERNS}, proceeding to next item")
-      continue
+      if any(exclude_file_pattern in full_path for exclude_file_pattern in EXCLUDE_FILE_PATTERNS):
+        LOGGER.info(f"{full_path} is excluded in configuration (exclusions: {EXCLUDE_FILE_PATTERNS}, proceeding to next item")
+        continue
 
-    if os.path.isdir(full_path):
-      LOGGER.debug(f"Found child directory inside {input_dir}, reading it")
-      read_input_dir(full_path)
-    elif os.path.isfile(full_path) and MKV_FILE_EXTENSION in f:
-      if f.replace(MKV_FILE_EXTENSION, MKV_MERGED_FILE_SUFFIX) in dir_content:
-        LOGGER.info(f"Merged mkv file for file {f} already exists, not converting subtitles")
-      else:
-        LOGGER.info(f"Found mkv file {full_path}")
-        jobs.append(threading.Thread(name=f"{job_name}-{f}", target=handle_mkv_file, args=(full_path, )))
-        LOGGER.info(f"Created {job_name} job for file {full_path}")
+      if os.path.isdir(full_path):
+        LOGGER.debug(f"Found child directory inside {input_path}, reading it")
+        read_input_path(full_path)
+      elif os.path.isfile(full_path) and MKV_FILE_EXTENSION in f:
+        if f.replace(MKV_FILE_EXTENSION, MKV_MERGED_FILE_SUFFIX) in dir_content:
+          LOGGER.info(f"Merged mkv file for file {full_path} already exists, not converting subtitles")
+        elif MKV_MERGED_FILE_SUFFIX in f:
+          LOGGER.info(f"Mkv file {full_path} includes MKV_MERGED_FILE_SUFFIX '{MKV_MERGED_FILE_SUFFIX}', not converting subtitles")
+        else:
+          LOGGER.info(f"Found mkv file {full_path}")
+          jobs.append(threading.Thread(name=f"{job_name}-{f}", target=handle_mkv_file, args=(full_path, )))
+          LOGGER.info(f"Created {job_name} job for file {full_path}")
 
-  for job in jobs:
-    job.start()
-    LOGGER.info(f"Started job {job.name}")
+    for job in jobs:
+      job.start()
+      LOGGER.info(f"Started job {job.name}")
 
-  for job in jobs:
-    job.join()
-    LOGGER.info(f"Job {job.name} ready")
+    for job in jobs:
+      job.join()
+      LOGGER.info(f"Job {job.name} ready")
+
+  except Exception:
+    LOGGER.error(f"Error occured when handling input path {input_path}:")
+    LOGGER.error(traceback.format_exc())
+    return 1
