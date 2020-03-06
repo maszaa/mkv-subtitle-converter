@@ -28,7 +28,7 @@ LOGGER_NAME = "subtitle_converter"
 LOG_FORMAT = "[%(asctime)-15s: %(levelname)s/%(funcName)s] %(message)s"
 LOG_FORMATTER = logging.Formatter(LOG_FORMAT)
 
-LOGGER = logging.getLogger(f"{LOGGER_NAME}-stdout")
+LOGGER = logging.getLogger(LOGGER_NAME)
 LOGGER.setLevel(logging.DEBUG)
 
 STDOUT_HANDLER = logging.StreamHandler(sys.stdout)

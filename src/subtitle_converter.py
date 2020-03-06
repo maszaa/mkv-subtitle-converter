@@ -199,10 +199,9 @@ def handle_mkv_file(filepath):
 
   SEMAPHORE.release()
 
-def read_input_path(input_path):
+def read_input_path(input_path, jobs):
   try:
     job_name = handle_mkv_file.__name__
-    jobs = []
 
     LOGGER.debug(f"Reading {input_path}")
     dir_content = os.listdir(input_path)
@@ -216,7 +215,7 @@ def read_input_path(input_path):
 
       if os.path.isdir(full_path):
         LOGGER.debug(f"Found child directory inside {input_path}, reading it")
-        read_input_path(full_path)
+        read_input_path(full_path, jobs)
       elif os.path.isfile(full_path) and MKV_FILE_EXTENSION in f:
         if f.replace(MKV_FILE_EXTENSION, MKV_MERGED_FILE_SUFFIX) in dir_content:
           LOGGER.info(f"Merged mkv file for file {full_path} already exists, not converting subtitles")
@@ -227,15 +226,16 @@ def read_input_path(input_path):
           jobs.append(threading.Thread(name=f"{job_name}-{f}", target=handle_mkv_file, args=(full_path, )))
           LOGGER.info(f"Created {job_name} job for file {full_path}")
 
-    for job in jobs:
-      job.start()
-      LOGGER.info(f"Started job {job.name}")
-
-    for job in jobs:
-      job.join()
-      LOGGER.info(f"Job {job.name} ready")
-
   except Exception:
     LOGGER.error(f"Error occured when handling input path {input_path}:")
     LOGGER.error(traceback.format_exc())
     return 1
+
+def handle_jobs(jobs):
+  for job in jobs:
+    job.start()
+    LOGGER.info(f"Started job {job.name}")
+
+  for job in jobs:
+    job.join()
+    LOGGER.info(f"Job {job.name} ready")
